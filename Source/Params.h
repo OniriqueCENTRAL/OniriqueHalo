@@ -47,7 +47,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout layout()
     AudioProcessorValueTreeState::ParameterLayout l;
     auto freq = [&] (const String& id, const String& name, float def)
     {
-        NormalisableRange<float> r (1000.0f, 20000.0f,
+        NormalisableRange<float> r (50.0f, 20000.0f,
                                     [] (float a, float b, float t) { return a * std::pow (b / a, t); },
                                     [] (float a, float b, float v) { return std::log (v / a) / std::log (b / a); },
                                     [] (float, float, float v) { return v; });

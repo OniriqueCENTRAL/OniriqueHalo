@@ -28,7 +28,7 @@ donc exactement :
 C'est la courbe que dessine l'interface ; le banc vérifie l'accord à 0,01 dB près pour les 3 formes, les 3 qualités et
 les 4 facteurs de suréchantillonnage.
 
-## 2. Les formes de bande (drapeaux de 1 à 20 kHz)
+## 2. Les formes de bande (drapeaux de 50 Hz à 20 kHz)
 
 | Forme   | `|B(f)|` (w = f / bas, v = f / haut, fréquences déformées par la bilinéaire) | Pente   |
 |---------|-------------------------------------------------------------------------------|---------|
@@ -55,7 +55,7 @@ les 4 facteurs de suréchantillonnage.
 **FIR (LINEAR)**
 
 - Une réponse symétrique, obtenue par échantillonnage fréquentiel de `|B(f)|` et une fenêtre de Kaiser (β = 7).
-- Sa **longueur est fixe** pour une fréquence d'échantillonnage (≈ 21 ms), si bien que la latence ne bouge pas quand
+- Sa **longueur est fixe** pour une fréquence d'échantillonnage (≈ 170 ms, de quoi suivre une pente à 24 dB/oct dès 50 Hz), si bien que la latence ne bouge pas quand
   on déplace les drapeaux.
 - Elle est appliquée par une convolution FFT à partitions uniformes, écrite pour HALO et synchrone : c'est ce qui permet
   de mesurer sa latence.
@@ -142,7 +142,7 @@ lignes de retard se remplissent.
 
 | Qualité | 1x  | 2x  | 4x  | 8x  |
 |---------|-----|-----|-----|-----|
-| LINEAR  | 711 | 760 | 771 | 776 |
+| LINEAR  | 4280 | 4329 | 4340 | 4345 |
 | DYNAMIC | 72  | 121 | 132 | 137 |
 | LIVE    | 0   | 7   | 8   | 9   |
 

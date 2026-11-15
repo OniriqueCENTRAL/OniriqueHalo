@@ -14,7 +14,7 @@ donnée de calibration de cet éditeur. Aucun binaire commercial n'a été désa
 
 **Les drapeaux de fréquence**
 
-- De 1 à 20 kHz, sur une échelle logarithmique.
+- Des drapeaux sur une échelle logarithmique (1 à 20 kHz chez l'original ; HALO descend jusqu'à 50 Hz).
 - Une demi-octave minimum entre les deux.
 - Trois configurations de bande.
 - Un solo par drapeau, et un solo momentané au clic droit.

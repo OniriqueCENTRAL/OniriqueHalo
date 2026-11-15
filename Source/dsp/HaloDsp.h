@@ -52,7 +52,7 @@ struct BandEdges
     double lo = 2500, hi = 20000;
     BandMode mode = BandMode::split;
 
-    static constexpr double minFreq = 1000.0, maxFreq = 20000.0;
+    static constexpr double minFreq = 50.0, maxFreq = 20000.0;
     static double halfOctave() { return 1.4142135623730951; }
 
     static BandEdges make (double lo, double hi, int mode)
@@ -190,9 +190,8 @@ struct IirControl
     bandMagnitude() (même amplitude que l'IIR, sans rotation de phase), fenêtre de Kaiser. */
 inline int firLengthFor (double fs)
 {
-    // ≈ 21 ms : de quoi suivre une pente 24 dB/oct dès 1 kHz
-    int n = (int) std::ceil (fs * 0.0213);
-    return std::clamp (n, 255, 8191) | 1;
+    int n = (int) std::ceil (fs * 0.17);   // ≈ 170 ms : de quoi suivre une pente 24 dB/oct dès 50 Hz
+    return std::clamp (n, 255, 32767) | 1;
 }
 
 inline double besselI0 (double x)

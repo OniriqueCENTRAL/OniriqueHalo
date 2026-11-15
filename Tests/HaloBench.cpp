@@ -112,8 +112,15 @@ int main()
             const int n = 24000;
             Stereo in { noise (0.1, n, 7), noise (0.1, n, 8) };
             auto out = run (e, in, p);
-            const int lag = xcorrLag (in.l, out.l, 6000);
             const int declared = e.getLatency();
+            // pic de corrélation cherché de 0 à 128 échantillons au-delà de la latence déclarée (et autant avant)
+            int lag = 0; double bestV = -1.0e300;
+            for (int L = std::max (0, declared - 128); L <= declared + 128; ++L)
+            {
+                double s = 0;
+                for (int i = 0; i + L < n; ++i) s += (double) in.l[(size_t) i] * out.l[(size_t) (i + L)];
+                if (s > bestV) { bestV = s; lag = L; }
+            }
             const juce::String what = juce::String ("latence reelle = declaree, ") + qname (q) + " " + juce::String (Engine::factors[o]) + "x";
             check (std::abs (lag - declared) <= (q == live ? 1 : 0), what.toRawUTF8(), "mesuree " + juce::String (lag) + ", declaree " + juce::String (declared));
         }
@@ -173,19 +180,23 @@ int main()
         for (int o = 0; o < 4; ++o)
         {
             double worst = 0;
-            for (int mode = 0; mode < 3; ++mode)
-            {
-                Engine e; auto p = neutral (q, o); p.mainLo = 2000; p.mainHi = 8000; p.mainMode = mode; p.mainTrim = -6;
-                const int n = 24000;
-                for (double f : { 1500.0, 3000.0, 5000.0, 9000.0, 14000.0 })
+            // drapeaux dans les aigus (2 – 8 kHz) et dans les graves (80 – 400 Hz)
+            struct Cfg { double lo, hi; std::vector<double> freqs; };
+            const Cfg cfgs[] { { 2000, 8000, { 1500.0, 3000.0, 5000.0, 9000.0, 14000.0 } }, { 80, 400, { 50.0, 100.0, 200.0, 350.0, 800.0, 3000.0 } } };
+            for (const auto& cfg : cfgs)
+                for (int mode = 0; mode < 3; ++mode)
                 {
-                    e.prepare (fs, block, p);
-                    Stereo in { sine (f, 0.1, fs, n), sine (f, 0.1, fs, n) };
-                    auto out = run (e, in, p);
-                    const double expect = db (1.0 - (1.0 - 0.5011872) * bandMagnitude (BandEdges::make (2000, 8000, mode), f, fs));
-                    worst = std::max (worst, std::abs (db (tone (out.l, f, fs, 8000, n) / 0.1) - expect));
+                    Engine e; auto p = neutral (q, o); p.mainLo = cfg.lo; p.mainHi = cfg.hi; p.mainMode = mode; p.mainTrim = -6;
+                    const int n = 48000;
+                    for (double f : cfg.freqs)
+                    {
+                        e.prepare (fs, block, p);
+                        Stereo in { sine (f, 0.1, fs, n), sine (f, 0.1, fs, n) };
+                        auto out = run (e, in, p);
+                        const double expect = db (1.0 - (1.0 - 0.5011872) * bandMagnitude (BandEdges::make (cfg.lo, cfg.hi, mode), f, fs));
+                        worst = std::max (worst, std::abs (db (tone (out.l, f, fs, 18000, n) / 0.1) - expect));
+                    }
                 }
-            }
             const juce::String what = juce::String ("forme de bande = courbe affichee, ") + qname (q) + " " + juce::String (Engine::factors[o]) + "x";
             check (worst < 0.2, what.toRawUTF8(), "ecart max " + juce::String (worst, 3) + " dB (SPLIT, DEFINED, FULL HF)");
         }

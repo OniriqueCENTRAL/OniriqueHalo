@@ -16,7 +16,7 @@ public:
     /** parallelView : la zone de PARALIMIT (ses drapeaux, sa bande, son S, 500 Hz – 20 kHz) ; sinon celle de MAIN */
     Analyser (juce::AudioProcessorValueTreeState& s, const halo::Scope& sc, halo::Meters& m, std::atomic<int>& momentary, bool parallelView = false)
         : state (s), scope (sc), meters (m), solo (momentary), fft (order), par (parallelView),
-          viewLo (parallelView ? 500.0f : tonal::minHz), viewHi (tonal::maxHz)
+          viewLo (tonal::minHz), viewHi (tonal::maxHz)
     {
         window.resize ((size_t) size);
         for (int i = 0; i < size; ++i) window[(size_t) i] = 0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * (float) i / (float) (size - 1));
@@ -248,12 +248,14 @@ public:
             repaint();
             return;
         }
+        // PARALIMIT : un clic dans sa zone (ou sur un de ses drapeaux) le met en service
+        if (par && ! e.mods.isPopupMenu()) switchParOn();
         if (dragging >= 0) gesture.begin (flagParam (dragging));
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (dragging < 0) return;
-        setFlag (dragging, juce::jlimit (1000.0f, 20000.0f, hzForX (e.position.x)));
+        setFlag (dragging, juce::jlimit (50.0f, 20000.0f, hzForX (e.position.x)));
         repaint();
     }
     void mouseUp (const juce::MouseEvent&) override
@@ -391,9 +393,23 @@ private:
         p->endChangeGesture();
         repaint();
     }
+    void switchParOn()
+    {
+        auto* on = state.getParameter (params::parOn);
+        if (on != nullptr && on->getValue() < 0.5f) { on->beginChangeGesture(); on->setValueNotifyingHost (1.0f); on->endChangeGesture(); repaint(); }
+    }
     void setFlag (int i, float hz)
     {
         gesture.set (hz);
+        // le drapeau de droite décide de la forme, comme sur un limiteur d'aigus de studio : tiré sous 19,5 kHz, la
+        // bande s'arrête à lui (DEFINED) ; poussé tout en haut, elle va jusqu'au bout (SPLIT, ou FULL HF gardé)
+        if (i & 1)
+        {
+            auto* mode = state.getParameter ((i == 1) ? params::mainMode : params::parMode);
+            const int cur = (int) std::lround (plainOf (*mode));
+            const int want = hz < 19500.0f ? 1 : (cur == 2 ? 2 : 0);
+            if (want != cur) { mode->beginChangeGesture(); mode->setValueNotifyingHost (mode->convertTo0to1 ((float) want)); mode->endChangeGesture(); }
+        }
         // une demi-octave au moins : le partenaire est repoussé
         const float k = 1.41421356f;
         auto* partner = flagParam (i ^ 1);
@@ -401,7 +417,7 @@ private:
         const float other = plainOf (*partner);
         float want = other;
         if ((i & 1) == 0 && other < hz * k) want = std::min (20000.0f, hz * k);
-        if ((i & 1) == 1 && other > hz / k) want = std::max (1000.0f, hz / k);
+        if ((i & 1) == 1 && other > hz / k) want = std::max (50.0f, hz / k);
         if (want != other) { partner->beginChangeGesture(); partner->setValueNotifyingHost (partner->convertTo0to1 (want)); partner->endChangeGesture(); }
     }
 
