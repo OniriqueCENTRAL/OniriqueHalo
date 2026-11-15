@@ -169,6 +169,7 @@ HaloEditor::HaloEditor (HaloProcessor& proc)
 
 HaloEditor::~HaloEditor()
 {
+    juce::PopupMenu::dismissAllActiveMenus();   // un menu ouvert utilise menuLook
     removeMouseListener (this);
     setLookAndFeel (nullptr);
     processor.momentarySolo.store (-1);
@@ -246,6 +247,7 @@ void HaloEditor::showExt()
     m.addSectionHeader (connected ? fr ("SIDECHAIN BRANCHÉE") : fr ("SIDECHAIN ABSENTE (à brancher dans le DAW)"));
     m.addItem (1, fr ("EXT commande MAIN"), true, p (params::scMain).getValue() > 0.5f);
     m.addItem (2, fr ("EXT commande PARALIMIT"), true, p (params::scPar).getValue() > 0.5f);
+    m.setLookAndFeel (&menuLook);
     juce::Component::SafePointer<HaloEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&ext), [safe] (int id)
     {
@@ -298,6 +300,7 @@ void HaloEditor::showSettings()
     menu.addSeparator();
     menu.addSubMenu (fr ("Latences mesurées"), lat);
 
+    menu.setLookAndFeel (&menuLook);
     juce::Component::SafePointer<HaloEditor> safe (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsButton), [safe] (int id)
     {

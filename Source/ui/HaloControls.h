@@ -444,6 +444,7 @@ public:
             juce::PopupMenu m;
             const int cur = (int) std::lround (plainOf (param));
             for (int i = 0; i < items.size(); ++i) m.addItem (i + 1, items[i], true, i == cur);
+            m.setLookAndFeel (&getLookAndFeel());   // sinon JUCE prend le style par défaut
             juce::Component::SafePointer<StatusItem> safe (this);
             m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int id)
             {
