@@ -2,10 +2,9 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Theme.h"
-#include "../dsp/EclipseEngine.h"
 
 //==============================================================================
-//  Les commandes d'ECLIPSE, dans la DA ONIRIQUE : potard à graduations (OniriqueKnob.h), gélules et segments en verre
+//  Les commandes de HALO, dans la DA ONIRIQUE : potard à graduations (OniriqueKnob.h), gélules et segments en verre
 //  (OniriqueDA.h). Toutes se dessinent à partir de leur taille (l'éditeur les place en points × échelle).
 //==============================================================================
 namespace ui
@@ -43,6 +42,8 @@ public:
         slider.getProperties().set ("bipolar", bipolar);
         slider.setDoubleClickReturnValue (true, (double) p.convertFrom0to1 (p.getDefaultValue()));
         slider.setMouseDragSensitivity (220);
+        // Maj + glisser : réglage fin (mode vitesse, quatre fois plus lent)
+        slider.setVelocityModeParameters (0.25, 1, 0.0, true, juce::ModifierKeys::shiftModifier);
         slider.setPopupMenuEnabled (false);
         slider.setTitle (labelText);
         slider.onValueChange = [this] { repaint(); };
@@ -55,6 +56,7 @@ public:
 
     void setScale (float s) { scale = s; resized(); }
     void setLabel (const juce::String& t) { if (label != t) { label = t; slider.setTitle (t); repaint(); } }
+    void setTip (const juce::String& t) { slider.setTooltip (t); }
 
     void resized() override
     {
@@ -122,8 +124,8 @@ private:
 };
 
 //==============================================================================
-/** Sélecteur à segments (onglets de la DA) pour un paramètre à choix : SOLO, cible de l'OFFSET. */
-class Segments : public juce::Component
+/** Sélecteur à segments (onglets de la DA) pour un paramètre à choix. */
+class Segments : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     Segments (juce::RangedAudioParameter& p, juce::StringArray names)
@@ -157,5 +159,49 @@ private:
     juce::ParameterAttachment attachment;
     int index = 0, hover = -1;
     float scale = 1.0f;
+};
+} // namespace ui
+
+namespace ui
+{
+//==============================================================================
+/** Bouton rond à témoin (POWER) : verre, LED braise. */
+class LedButton : public juce::Button, private juce::Timer
+{
+public:
+    LedButton (juce::RangedAudioParameter& p, const juce::String& t)
+        : juce::Button (t), attachment (p, [this] (float v) { on = v > 0.5f; startTimerHz (60); })
+    {
+        setTitle (t);
+        attachment.sendInitialUpdate();
+        lit = on ? 1.0f : 0.0f;
+        onClick = [this] { attachment.setValueAsCompleteGesture (on ? 0.0f : 1.0f); };
+    }
+    void setScale (float s) { scale = s; repaint(); }
+    bool isOn() const { return on; }
+    std::function<void (bool)> onSwitched;
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        const auto r = getLocalBounds().toFloat().reduced (2.0f * scale);
+        const float d = std::min (r.getWidth(), r.getHeight());
+        const auto c = juce::Rectangle<float> (d, d).withCentre (r.getCentre());
+        onirique::da::glass (g, c, d * 0.5f, scale, false);
+        if (over) { g.setColour (juce::Colours::white.withAlpha (0.05f)); g.fillEllipse (c); }
+        if (down) { g.setColour (juce::Colours::black.withAlpha (0.2f)); g.fillEllipse (c); }
+        onirique::da::led (g, c.getCentre(), d * 0.36f, lit);
+    }
+
+private:
+    void timerCallback() override
+    {
+        const float t = on ? 1.0f : 0.0f;
+        lit += (t - lit) * 0.3f;
+        if (onSwitched) onSwitched (on);
+        if (std::abs (t - lit) < 0.01f) { lit = t; stopTimer(); }
+        repaint();
+    }
+    juce::ParameterAttachment attachment;
+    bool on = false;
+    float lit = 0.0f, scale = 1.0f;
 };
 } // namespace ui

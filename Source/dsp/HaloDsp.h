@@ -107,7 +107,7 @@ struct IirBand
     Svf loA, loLp, loHp;            // croisement du bas : BW2, puis BW2 de chaque côté (LR4)
     Svf hiA, hiLp, hiHp, hiAp;      // croisement du haut sur la partie haute, passe-tout du haut sur la partie basse
     Svf full;                        // FULL HF : Q 0,5
-    double ax = 0, band = 0;
+    double ax = 0, band = 0, H = 0, H2 = 0;   // H : au-dessus du drapeau bas, H2 : au-dessus du drapeau haut (solos)
 
     void reset() { for (auto* s : { &loA, &loLp, &loHp, &hiA, &hiLp, &hiHp, &hiAp, &full }) s->reset(); ax = band = 0; }
 
@@ -126,12 +126,14 @@ struct IirBand
         loA.tick (x);
         loLp.tick (loA.lp());
         loHp.tick (loA.hp());
-        const double L = loLp.lp(), H = loHp.hp();
+        const double L = loLp.lp();
+        H = loHp.hp();
         hiA.tick (H);
         hiLp.tick (hiA.lp());
         hiHp.tick (hiA.hp());
         hiAp.tick (L);
-        const double M = hiLp.lp(), H2 = hiHp.hp();
+        const double M = hiLp.lp();
+        H2 = hiHp.hp();
         full.tick (x);
 
         // FULL HF : croisement LR2 (pôles réels confondus) ; bas − haut est un passe-tout du 1er ordre, et −haut

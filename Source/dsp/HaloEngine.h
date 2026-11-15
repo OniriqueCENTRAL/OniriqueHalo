@@ -39,7 +39,7 @@ struct EngineParams
     bool attackFast = false, releaseFast = false;
     int stereo = 0;                    // 0 LR, 1 MS
     double mainLink = 1.0;             // 0 … 1
-    int mainSolo = 0;                  // 0 off, 1 bande, 2 reste
+    int mainSolo = 0;                  // 0 off, 1 bande traitée, 2 au-dessus du drapeau bas, 3 au-dessus du drapeau haut, 4 reste (hors bande)
     bool scMain = false;
     double mix = 1.0;                  // 0 … 1
     // PARALIMIT
@@ -99,6 +99,9 @@ public:
     //==========================================================================
     void prepare (double sampleRate, int maxBlock, const EngineParams& p)
     {
+        // tout le prepare sous le verrou du dessin des FIR : la minuterie (updateFir) ne touche jamais un convolueur
+        // en cours de réallocation
+        std::lock_guard<std::mutex> lock (designLock);
         fs = sampleRate;
         maxN = std::max (1, maxBlock);
         base.setSize (osChannels, sub);
@@ -109,6 +112,7 @@ public:
         ctlPar.prepare (fs, BandEdges::make (p.parLo, p.parHi, p.parMode));
         for (auto& b : iirMain) { b.reset(); b.set (ctlMain.gl, ctlMain.gh); }
         for (auto& b : iirPar) { b.reset(); b.set (ctlPar.gl, ctlPar.gh); }
+        for (auto& b : soloBand) { b.reset(); b.set (ctlMain.gl, ctlMain.gh); }
         ctrlA = 1.0 - std::exp (-(double) sub / (0.03 * fs));
 
         // ---- séparations FIR (longueur fixe pour cette fréquence : la latence ne dépend pas des drapeaux)
@@ -117,7 +121,6 @@ public:
         convMain.prepare (partition, firN, 4);
         convPar.prepare (partition, firN, 4);
         {
-            std::lock_guard<std::mutex> lock (designLock);
             int order = 0; while ((1 << order) < 4 * firN) ++order;
             designFft = std::make_unique<juce::dsp::FFT> (order);
             designScratch.assign ((size_t) (2 << order), 0.0f);
@@ -156,6 +159,8 @@ public:
         for (auto& d : axDelay) d.prepare (maxLat);
         for (auto& d : bDelay) d.prepare (maxLat);
         for (auto& d : dryDelay) d.prepare (maxLat);
+        for (auto& d : soloLoDelay) d.prepare (maxLat);
+        for (auto& d : soloHiDelay) d.prepare (maxLat);
 
         scope.prepare (fs);
         setBaseSmoothing();
@@ -168,6 +173,8 @@ public:
 
     /** La latence déclarée de la chaîne en service (mesurée). */
     int getLatency() const { return latencyTable[activeQuality][activeOs]; }
+    /** La même, lisible depuis un autre thread (minuterie du processeur). */
+    int getLatencyShared() const { return latencyNow.load(); }
     /** La latence mesurée d'une chaîne (qualité, facteur 0 … 3). */
     int latencyFor (int quality, int os) const { return latencyTable[std::clamp (quality, 0, 2)][std::clamp (os, 0, 3)]; }
     /** La chaîne qui va être en service (la latence à déclarer pendant le fondu de changement). */
@@ -344,6 +351,7 @@ private:
         const int osLat = q == live ? osLatIir[o] : osLatFir[o];
         const int la = q == live ? 0 : lookahead;
         laOs = la * f + (q == live ? 0 : osPad[o]);
+        latencyNow.store (latencyTable[q][o]);
         for (auto& d : laDelay) { d.reset(); d.setDelay (laOs); }
         for (auto& m : maxMain) m.reset();
         for (auto& m : maxPar) m.reset();
@@ -354,6 +362,8 @@ private:
             axDelay[c].setDelay (q == linear ? firLatency + osLat + la : q == dynamic ? osLat + la : 0);
             bDelay[c].setDelay (q == live ? 0 : osLat + la);
             dryDelay[c].setDelay (total);
+            soloLoDelay[c].reset(); soloHiDelay[c].reset(); soloBand[c].reset();
+            soloLoDelay[c].setDelay (total); soloHiDelay[c].setDelay (total);
         }
         for (auto& b : iirMain) b.reset();
         for (auto& b : iirPar) b.reset();
@@ -378,12 +388,19 @@ private:
         bypassS.snap (p.bypass ? 1 : 0); compGain.snap (1.0);
         const auto w = monitorWeights (p);
         for (int i = 0; i < 3; ++i) monS[i].snap (w[i]);
-        soloKindS[0].snap (p.mainSolo == 1 ? 1 : 0); soloKindS[1].snap (p.mainSolo == 2 ? 1 : 0); soloKindS[2].snap (p.parSolo ? 1 : 0);
+        const auto st = soloTargets (p);
+        for (int k = 0; k < 5; ++k) soloKindS[k].snap (st[(size_t) k]);
     }
 
     static double parGain (const EngineParams& p)
     {
         return (p.parAmountDb <= -59.9 ? 0.0 : dbToGain (p.parAmountDb)) * dbToGain (p.parTrim);
+    }
+    /** les solos : bande traitée, au-dessus du bas, au-dessus du haut, reste, PARALIMIT */
+    static std::array<double, 5> soloTargets (const EngineParams& p)
+    {
+        return { p.mainSolo == 1 ? 1.0 : 0.0, p.mainSolo == 2 ? 1.0 : 0.0, p.mainSolo == 3 ? 1.0 : 0.0, p.mainSolo == 4 ? 1.0 : 0.0,
+                 p.parSolo && p.parOn ? 1.0 : 0.0 };
     }
     /** poids de l'écoute : normal, DELTA, SOLO */
     static std::array<double, 3> monitorWeights (const EngineParams& p)
@@ -416,7 +433,7 @@ private:
         // ---- contrôle : drapeaux IIR, tables du limiteur, fenêtres de détection
         ctlMain.target = BandEdges::make (p.mainLo, p.mainHi, p.mainMode);
         ctlPar.target = BandEdges::make (p.parLo, p.parHi, p.parMode);
-        if (ctlMain.control (ctrlA)) for (auto& b : iirMain) b.set (ctlMain.gl, ctlMain.gh);
+        if (ctlMain.control (ctrlA)) { for (auto& b : iirMain) b.set (ctlMain.gl, ctlMain.gh); for (auto& b : soloBand) b.set (ctlMain.gl, ctlMain.gh); }
         if (ctlPar.control (ctrlA)) for (auto& b : iirPar) b.set (ctlPar.gl, ctlPar.gh);
         tabMain.build (fsO, p.attackFast, p.releaseFast);
         tabPar.build (fsO, p.parAttackFast, p.parReleaseFast);
@@ -527,14 +544,24 @@ private:
 
         // ---- 5. sortie
         const auto mw = monitorWeights (p);
-        const double soloT[3] { p.mainSolo == 1 ? 1.0 : 0.0, p.mainSolo == 2 ? 1.0 : 0.0, p.parSolo && p.parOn ? 1.0 : 0.0 };
+        const auto soloT = soloTargets (p);
+        // les solos « au-dessus d'un drapeau » : le vrai signal filtré (croisements LR4 aux drapeaux), au retard total
+        const bool needAbove = p.mainSolo == 2 || p.mainSolo == 3 || soloKindS[1].v > 1.0e-4 || soloKindS[2].v > 1.0e-4;
         const float* axd[2] { q == live ? B[4] : A[2], q == live ? B[5] : A[3] };
         const float* bd[2] { q == live ? B[6] : A[6], q == live ? B[7] : A[7] };
         for (int i = 0; i < len; ++i)
         {
             const double mix = mixS.next (p.mix), og = outG.next (dbToGain (p.outDb)), byp = bypassS.next (p.bypass ? 1.0 : 0.0);
             double w[3]; for (int k = 0; k < 3; ++k) w[k] = monS[k].next (mw[(size_t) k]);
-            double sk[3]; for (int k = 0; k < 3; ++k) sk[k] = soloKindS[k].next (soloT[k]);
+            double sk[5]; for (int k = 0; k < 5; ++k) sk[k] = soloKindS[k].next (soloT[(size_t) k]);
+            double above[2][2] {};
+            if (needAbove)
+                for (int c = 0; c < 2; ++c)
+                {
+                    soloBand[c].tick (A[c][i], ctlMain.w);
+                    above[c][0] = soloLoDelay[c].tick ((float) soloBand[c].H);
+                    above[c][1] = soloHiDelay[c].tick ((float) soloBand[c].H2);
+                }
             if (structHold > 0) --structHold;
             else structGain = std::clamp (structGain + (structTarget > 0.5 ? structStep : -structStep), 0.0, 1.0);
 
@@ -544,7 +571,7 @@ private:
                 const double dev = mix * B[c][i], par = B[2 + c][i];
                 y[c] = axd[c][i] + dev + par;
                 dl[c] = dev + par;
-                so[c] = sk[0] * (bd[c][i] + dev) + sk[1] * (axd[c][i] - bd[c][i]) + sk[2] * par;
+                so[c] = sk[0] * (bd[c][i] + dev) + sk[1] * above[c][0] + sk[2] * above[c][1] + sk[3] * (axd[c][i] - bd[c][i]) + sk[4] * par;
             }
             // compensation de niveau : puissance lente de a(x) contre celle de y
             {
@@ -671,6 +698,7 @@ private:
     int activeQuality = dynamic, activeOs = 1, wantQuality = dynamic, wantOs = 1;
     double structGain = 1.0, structTarget = 1.0;
     int structHold = 0;
+    std::atomic<int> latencyNow { 0 };
     bool firstBlock = true;
 
     std::array<Delay, 4> laDelay;                       // bandes MAIN L R, PARALIMIT L R (anticipation)
@@ -680,7 +708,9 @@ private:
     std::array<Delay, 2> axDelay, bDelay, dryDelay;
 
     Smooth thrAS, thrBS, trimS, onS, linkS, pThrS, pGainS, pLinkS, pOnS, makeup;
-    Smooth inG, outG, mixS, bypassS, compGain, monS[3], soloKindS[3];
+    Smooth inG, outG, mixS, bypassS, compGain, monS[3], soloKindS[5];
+    std::array<IirBand, 2> soloBand;
+    std::array<Delay, 2> soloLoDelay, soloHiDelay;
     double pinPow = 0, poutPow = 0, powA = 0.001;
     double cmpIn = 0, cmpOut = 0, cmpA = 1.0e-5;
     double inPk[2] {}, outPk[2] {}, bandPk[2] {}, grPk[4] {}, extPk = 0, tmpPost = 0;
