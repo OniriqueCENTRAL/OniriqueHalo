@@ -254,19 +254,25 @@ private:
         const float top = 40 * scale, bottom = (float) getHeight() - 30 * scale;
         return top + (bottom - top) * (float) k / 5.0f;
     }
-    juce::Rectangle<float> phonesArea() const { return juce::Rectangle<float> (24 * scale, 22 * scale).withCentre ({ getWidth() * 0.5f, 11 * scale }); }
+    juce::Rectangle<float> phonesArea() const { return juce::Rectangle<float> (24 * scale, 24 * scale).withCentre ({ getWidth() * 0.5f, 13 * scale }); }
     void drawPhones (juce::Graphics& g, juce::Rectangle<float> r, int soloMode) const
     {
         const bool on = soloMode == 1 || soloMode == 4;
         const float u = r.getHeight() / 22.0f;
         const auto c = r.getCentre();
-        if (on) { g.setColour (accent.withAlpha (0.3f)); g.fillEllipse (juce::Rectangle<float> (26 * u, 26 * u).withCentre (c)); }
+        if (on) { g.setColour (accent.withAlpha (0.3f)); g.fillEllipse (juce::Rectangle<float> (21 * u, 21 * u).withCentre (c)); }
         g.setColour (on ? bone : haze);
-        juce::Path arc;
-        arc.addCentredArc (c.x, c.y + 2 * u, 7 * u, 7 * u, 0, -juce::MathConstants<float>::halfPi * 1.1f, juce::MathConstants<float>::halfPi * 1.1f, true);
-        g.strokePath (arc, juce::PathStrokeType (1.6f * u));
-        g.fillRoundedRectangle (c.x - 8.5f * u, c.y + 1 * u, 3.5f * u, 6.5f * u, 1.2f * u);
-        g.fillRoundedRectangle (c.x + 5.0f * u, c.y + 1 * u, 3.5f * u, 6.5f * u, 1.2f * u);
+        // l'arceau (de l'oreille gauche à la droite, par le haut) et les deux écouteurs entiers
+        const float rr = 6.5f * u, cy = c.y + 1.5f * u;
+        juce::Path band;
+        band.addCentredArc (c.x, cy, rr, rr, 0, -juce::MathConstants<float>::pi * 0.56f, juce::MathConstants<float>::pi * 0.56f, true);
+        g.strokePath (band, juce::PathStrokeType (1.5f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        for (float side : { -1.0f, 1.0f })
+        {
+            const auto cup = juce::Rectangle<float> (3.6f * u, 6.4f * u).withCentre ({ c.x + side * rr, cy + 3.2f * u });
+            g.fillRoundedRectangle (cup, 1.6f * u);
+            g.fillRoundedRectangle (juce::Rectangle<float> (1.4f * u, 4.2f * u).withCentre ({ cup.getCentreX() - side * 2.4f * u, cup.getCentreY() }), 0.7f * u);
+        }
         if (soloMode == 4) text (g, "REST", { c.x - 20 * u, c.y + 8 * u, 40 * u, 9 * u }, font (Face::mono, 7.0f * u), bone);
     }
     void timerCallback() override
@@ -406,22 +412,26 @@ public:
             text (g, label, r, font (Face::body, 10.0f * scale, 0.14f), on ? bone : haze);
             return;
         }
-        const auto lf = font (Face::body, 10.0f * scale, 0.1f), vf = font (Face::mono, 10.0f * scale);
-        const float lw = juce::GlyphArrangement::getStringWidth (lf, label) + 7 * scale;
-        text (g, label, r.removeFromLeft (lw), lf, dim, juce::Justification::centredLeft);
+        // la DA : étiquette en capitales, valeur dans une gélule de verre (allumée au survol), flèche dans la gélule
+        const auto lf = font (Face::body, 9.0f * scale, 0.18f), vf = font (Face::mono, 10.0f * scale);
+        const auto caps = label.toUpperCase();
+        const float lw = juce::GlyphArrangement::getStringWidth (lf, caps) + 7 * scale;
+        text (g, caps, r.removeFromLeft (lw), lf, haze, juce::Justification::centredLeft);
         juce::String v = kind == choice ? items[(int) std::lround (plainOf (param))] : param.getCurrentValueAsText();
         if (suffix) v << suffix();
-        const auto box = r.withTrimmedRight (kind == choice ? 12 * scale : 0).withSizeKeepingCentre (r.getWidth() - (kind == choice ? 12 * scale : 0), 20 * scale);
-        g.setColour (ink.withAlpha (over ? 0.95f : 0.75f));
-        g.fillRoundedRectangle (box.withX (r.getX()), 5 * scale);
-        text (g, v, box.withX (r.getX()).reduced (5 * scale, 0), vf, dragging ? onirique::look::emberPink : bone.withAlpha (0.9f), juce::Justification::centredLeft);
+        const auto box = r.withSizeKeepingCentre (r.getWidth(), 22 * scale);
+        onirique::da::glass (g, box, box.getHeight() * 0.5f, scale, false);
+        if (over || dragging) onirique::da::seg (g, box, dragging ? 0.6f : 0.0f, 1.0f, scale, box.getHeight() * 0.5f);
+        auto inner = box.reduced (9 * scale, 0);
         if (kind == choice)
         {
             juce::Path ch;
-            const float cx = r.getRight() - 6 * scale, cy = r.getCentreY();
-            ch.startNewSubPath (cx - 3.5f * scale, cy + 2 * scale); ch.lineTo (cx, cy - 2 * scale); ch.lineTo (cx + 3.5f * scale, cy + 2 * scale);
-            g.setColour (haze); g.strokePath (ch, juce::PathStrokeType (1.3f * scale));
+            const float cx = inner.getRight() - 3 * scale, cy = box.getCentreY();
+            ch.startNewSubPath (cx - 3.5f * scale, cy - 1.5f * scale); ch.lineTo (cx, cy + 2 * scale); ch.lineTo (cx + 3.5f * scale, cy - 1.5f * scale);
+            g.setColour (over ? bone : accentLit.withAlpha (0.85f)); g.strokePath (ch, juce::PathStrokeType (1.4f * scale));
+            inner.removeFromRight (12 * scale);
         }
+        text (g, v, inner, vf, dragging ? onirique::look::emberPink : bone.withAlpha (0.92f), juce::Justification::centredLeft);
     }
 
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }

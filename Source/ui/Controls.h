@@ -205,3 +205,99 @@ private:
     float lit = 0.0f, scale = 1.0f;
 };
 } // namespace ui
+
+namespace ui
+{
+//==============================================================================
+/** Menus déroulants et infobulles dans la DA ONIRIQUE : verre nuit, liseré braise, survol en dégradé rouge,
+    coches en LED, polices de la charte. Posée sur l'éditeur : tous les menus et infobulles de HALO la prennent. */
+class MenuLook : public juce::LookAndFeel_V4
+{
+public:
+    MenuLook()
+    {
+        setColour (juce::PopupMenu::backgroundColourId, ink);
+        setColour (juce::PopupMenu::textColourId, bone);
+        setColour (juce::PopupMenu::headerTextColourId, onirique::look::emberPink);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, accent);
+        setColour (juce::PopupMenu::highlightedTextColourId, bone);
+        setColour (juce::TooltipWindow::backgroundColourId, ink);
+        setColour (juce::TooltipWindow::textColourId, bone);
+        setColour (juce::TooltipWindow::outlineColourId, accent.withAlpha (0.5f));
+    }
+
+    void drawPopupMenuBackground (juce::Graphics& g, int w, int h) override
+    {
+        const auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h);
+        g.fillAll (onirique::da::night);
+        g.setGradientFill (juce::ColourGradient (onirique::look::emberDeep.withAlpha (0.35f), 0, 0, onirique::da::night.withAlpha (0.0f), 0, (float) h * 0.7f, false));
+        g.fillRect (r);
+        g.setColour (accent.withAlpha (0.45f));
+        g.drawRect (r, 1.0f);
+    }
+
+    void drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area, bool isSeparator, bool isActive, bool isHighlighted,
+                            bool isTicked, bool hasSubMenu, const juce::String& text, const juce::String& shortcut,
+                            const juce::Drawable*, const juce::Colour*) override
+    {
+        auto r = area.toFloat();
+        if (isSeparator)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.08f));
+            g.fillRect (r.reduced (10, 0).withHeight (1.0f).withCentre (r.getCentre()));
+            return;
+        }
+        if (isHighlighted && isActive)
+            onirique::da::seg (g, r.reduced (4, 1), 1.0f, 0.0f, 1.0f, 6.0f);
+        const auto lead = r.removeFromLeft (26);
+        if (isTicked) onirique::da::led (g, lead.getCentre().translated (2, 0), 4.0f, 1.0f);
+        if (hasSubMenu)
+        {
+            const auto a = r.removeFromRight (18).getCentre();
+            juce::Path p; p.startNewSubPath (a.x - 2.5f, a.y - 4); p.lineTo (a.x + 2, a.y); p.lineTo (a.x - 2.5f, a.y + 4);
+            g.setColour (isHighlighted ? bone : haze);
+            g.strokePath (p, juce::PathStrokeType (1.4f));
+        }
+        g.setColour (! isActive ? haze.withAlpha (0.8f) : isHighlighted || isTicked ? bone : bone.withAlpha (0.85f));
+        g.setFont (getPopupMenuFont());
+        g.drawText (text, r.withTrimmedRight (6), juce::Justification::centredLeft, true);
+        if (shortcut.isNotEmpty()) { g.setColour (dim); g.drawText (shortcut, r.withTrimmedRight (8), juce::Justification::centredRight, true); }
+    }
+
+    void drawPopupMenuSectionHeader (juce::Graphics& g, const juce::Rectangle<int>& area, const juce::String& name) override
+    {
+        g.setColour (onirique::look::emberPink);
+        g.setFont (font (Face::display, 11.0f, 0.18f));
+        g.drawText (name, area.toFloat().withTrimmedLeft (12).withTrimmedBottom (2), juce::Justification::bottomLeft, true);
+    }
+
+    juce::Font getPopupMenuFont() override { return font (Face::body, 13.0f, 0.04f); }
+
+    void getIdealPopupMenuItemSize (const juce::String& text, bool isSeparator, int standardHeight, int& w, int& h) override
+    {
+        if (isSeparator) { w = 50; h = 9; return; }
+        h = std::max (standardHeight, 26);
+        w = juce::roundToInt (juce::GlyphArrangement::getStringWidth (getPopupMenuFont(), text)) + 26 + 40;
+    }
+
+    int getPopupMenuBorderSize() override { return 5; }
+
+    void drawTooltip (juce::Graphics& g, const juce::String& text, int w, int h) override
+    {
+        drawPopupMenuBackground (g, w, h);
+        g.setColour (bone);
+        juce::AttributedString s; s.setText (text); s.setFont (font (Face::body, 12.5f, 0.02f)); s.setColour (bone);
+        juce::TextLayout tl; tl.createLayout (s, (float) w - 20.0f);
+        tl.draw (g, juce::Rectangle<float> (10, 8, (float) w - 20, (float) h - 16));
+    }
+
+    juce::Rectangle<int> getTooltipBounds (const juce::String& text, juce::Point<int> pos, juce::Rectangle<int> parent) override
+    {
+        juce::AttributedString s; s.setText (text); s.setFont (font (Face::body, 12.5f, 0.02f));
+        juce::TextLayout tl; tl.createLayout (s, 340.0f);
+        const int w = (int) std::ceil (tl.getWidth()) + 22, h = (int) std::ceil (tl.getHeight()) + 18;
+        return juce::Rectangle<int> (pos.x > parent.getCentreX() ? pos.x - (w + 12) : pos.x + 18,
+                                     pos.y > parent.getCentreY() ? pos.y - (h + 6) : pos.y + 6, w, h).constrainedWithin (parent);
+    }
+};
+} // namespace ui

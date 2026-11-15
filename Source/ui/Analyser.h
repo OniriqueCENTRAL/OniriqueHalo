@@ -13,8 +13,10 @@ namespace ui
 class Analyser : public juce::Component, private juce::Timer
 {
 public:
-    Analyser (juce::AudioProcessorValueTreeState& s, const halo::Scope& sc, halo::Meters& m, std::atomic<int>& momentary)
-        : state (s), scope (sc), meters (m), solo (momentary), fft (order)
+    /** parallelView : la zone de PARALIMIT (ses drapeaux, sa bande, son S, 500 Hz – 20 kHz) ; sinon celle de MAIN */
+    Analyser (juce::AudioProcessorValueTreeState& s, const halo::Scope& sc, halo::Meters& m, std::atomic<int>& momentary, bool parallelView = false)
+        : state (s), scope (sc), meters (m), solo (momentary), fft (order), par (parallelView),
+          viewLo (parallelView ? 500.0f : tonal::minHz), viewHi (tonal::maxHz)
     {
         window.resize ((size_t) size);
         for (int i = 0; i < size; ++i) window[(size_t) i] = 0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * (float) i / (float) (size - 1));
@@ -43,18 +45,16 @@ public:
     {
         const auto b = getLocalBounds().toFloat();
         const auto plot = plotArea();
-        g.setColour (juce::Colours::black.withAlpha (0.4f));
-        g.fillRoundedRectangle (plot.expanded (2 * scale), 8 * scale);
 
         const auto prm = params::Reader (state).read (false);
         const auto main = halo::BandEdges::make (prm.mainLo, prm.mainHi, prm.mainMode);
-        const auto par = halo::BandEdges::make (prm.parLo, prm.parHi, prm.parMode);
+        const auto pe = halo::BandEdges::make (prm.parLo, prm.parHi, prm.parMode);
         const double fsView = std::max (44100.0, scope.rate.load());
-        const bool defMain = main.mode == halo::BandMode::defined, defPar = par.mode == halo::BandMode::defined;
+        const bool defMain = main.mode == halo::BandMode::defined, defPar = pe.mode == halo::BandMode::defined;
         for (int k = 0; k < points; ++k)
         {
             mag[(size_t) k] = (float) halo::bandMagnitude (main, hzAt (k), fsView);
-            pmag[(size_t) k] = prm.parOn ? (float) halo::bandMagnitude (par, hzAt (k), fsView) : 0.0f;
+            pmag[(size_t) k] = (float) halo::bandMagnitude (pe, hzAt (k), fsView);
         }
 
         {
@@ -80,10 +80,10 @@ public:
                 g.setGradientFill (juce::ColourGradient (c.withAlpha (a * 0.35f), 0, plot.getY(), c.withAlpha (a), 0, plot.getBottom(), false));
                 g.fillPath (z);
             };
-            zone (mag, accent, prm.mainOn ? 0.16f : 0.06f);
-            if (prm.parOn) zone (pmag, onirique::look::emberPink, 0.13f);
+            juce::ignoreUnused (zone);   // pas de forme de fond : la bande se lit à la couleur des barres
 
-            // référence tonale
+            // référence tonale (seulement si elle est choisie dans ⚙)
+            if (refIndex() < 4)
             {
                 juce::Path line, bandPath;
                 for (int k = 0; k < points; ++k) { const float y = yFor (reference (hzAt (k))); if (k == 0) line.startNewSubPath (xAt (k), y); else line.lineTo (xAt (k), y); }
@@ -98,53 +98,52 @@ public:
                 g.fillPath (dashed);
             }
 
-            // spectre « après » : rempli, gris hors bande, braise dans MAIN, rose dans PARALIMIT
-            juce::Path fill, outline, before;
-            for (int k = 0; k < points; ++k)
+            // spectre « après » : un tapis de barres fines (pas de courbe), gris hors bande, braise dans MAIN,
+            // rose dans PARALIMIT
+            juce::Path fill;
             {
-                const float x = xAt (k), y = yFor (dispPost[(size_t) k]), y0 = yFor (dispPre[(size_t) k]);
-                if (k == 0) { fill.startNewSubPath (x, plot.getBottom()); outline.startNewSubPath (x, y); before.startNewSubPath (x, y0); }
-                else { outline.lineTo (x, y); before.lineTo (x, y0); }
-                fill.lineTo (x, y);
+                const float barW = std::max (1.0f, 1.2f * scale), gap = std::max (1.0f, 0.9f * scale);
+                for (float x = plot.getX(); x < plot.getRight(); x += barW + gap)
+                {
+                    const float hz = hzForX (x + barW * 0.5f);
+                    const float y = yFor (sampleDisplay (dispPost, juce::jlimit (tonal::minHz, tonal::maxHz, hz)));
+                    if (y < plot.getBottom() - 0.5f) fill.addRectangle (x, y, barW, plot.getBottom() - y);
+                }
             }
-            fill.lineTo (plot.getRight(), plot.getBottom()); fill.closeSubPath();
-            g.setGradientFill (juce::ColourGradient (bone.withAlpha (0.22f), 0, plot.getY(), bone.withAlpha (0.04f), 0, plot.getBottom(), false));
+            g.setGradientFill (juce::ColourGradient (bone.withAlpha (0.42f), 0, plot.getY(), bone.withAlpha (0.12f), 0, plot.getBottom(), false));
             g.fillPath (fill);
             auto tint = [&] (float lo, float hi, juce::Colour c, float a)
             {
                 juce::Graphics::ScopedSaveState inner (g);
                 g.reduceClipRegion (juce::Rectangle<float> (xFor (lo), plot.getY(), xFor (hi) - xFor (lo), plot.getHeight()).toNearestInt());
-                g.setGradientFill (juce::ColourGradient (c.withAlpha (a), 0, plot.getY(), c.withAlpha (a * 0.25f), 0, plot.getBottom(), false));
+                g.setGradientFill (juce::ColourGradient (c.withAlpha (0.95f * a), 0, plot.getY(), c.withAlpha (0.45f * a), 0, plot.getBottom(), false));
                 g.fillPath (fill);
             };
-            if (prm.mainOn) tint ((float) main.lo, defMain ? (float) main.hi : tonal::maxHz, accentLit, 0.55f);
-            if (prm.parOn) tint ((float) par.lo, defPar ? (float) par.hi : tonal::maxHz, onirique::look::emberPink, 0.45f);
-            g.setColour (haze.withAlpha (0.3f));
-            g.strokePath (before, juce::PathStrokeType (1.0f * scale));
-            g.setColour (bone.withAlpha (0.8f));
-            g.strokePath (outline, juce::PathStrokeType (1.3f * scale, juce::PathStrokeType::curved));
+            if (! par && prm.mainOn) tint ((float) main.lo, defMain ? (float) main.hi : tonal::maxHz, accentLit, 1.0f);
+            if (par && prm.parOn) tint ((float) pe.lo, defPar ? (float) pe.hi : tonal::maxHz, onirique::look::emberPink, 1.0f);
 
             // la réduction en cours, suspendue au haut : 1 − (1 − g)·|bande|
-            const float gr = std::max (grShown[0], grShown[1]);
-            if (gr > 0.05f && prm.mainOn)
+            const float gr = par ? std::max (grShown[2], grShown[3]) : std::max (grShown[0], grShown[1]);
+            const auto& own = par ? pmag : mag;
+            if (false && gr > 0.05f && (par ? prm.parOn : prm.mainOn))   // la réduction se lit sur les LED et le fader
             {
                 juce::Path red;
-                const float span = plot.getHeight() * 0.35f, zoom = grZoom();
+                const float span = plot.getHeight() * 0.35f, zoom = par ? 24.0f : grZoom();
                 const float gLin = juce::Decibels::decibelsToGain (-gr);
                 bool started = false;
                 for (int k = 0; k < points; ++k)
                 {
-                    if (mag[(size_t) k] < 0.02f) { started = false; continue; }   // seulement dans la bande
-                    const float dB = juce::Decibels::gainToDecibels (std::max (1.0e-4f, 1.0f - (1.0f - gLin) * mag[(size_t) k]));
+                    if (own[(size_t) k] < 0.02f) { started = false; continue; }   // seulement dans la bande
+                    const float dB = juce::Decibels::gainToDecibels (std::max (1.0e-4f, 1.0f - (1.0f - gLin) * own[(size_t) k]));
                     const float y = plot.getY() + span * std::min (1.0f, -dB / zoom);
                     if (! started) { red.startNewSubPath (xAt (k), y); started = true; } else red.lineTo (xAt (k), y);
                 }
-                g.setColour (accentLit);
+                g.setColour (par ? onirique::look::emberPink : accentLit);
                 g.strokePath (red, juce::PathStrokeType (2.0f * scale, juce::PathStrokeType::curved));
             }
 
             // solo momentané : la zone écoutée s'éclaire
-            if (solo.load() >= 1) { g.setColour (bone.withAlpha (0.05f)); g.fillRect (plot); }
+            if (const int m = solo.load(); par ? m == 5 : (m >= 1 && m <= 4)) { g.setColour (bone.withAlpha (0.05f)); g.fillRect (plot); }
 
             // les drapeaux : un trait, et leur fréquence en haut
             auto flagLine = [&] (int i, float hz, bool active, juce::Colour c)
@@ -169,17 +168,21 @@ public:
                     text (g, label, box, font (Face::mono, 9.0f * scale), c);
                 }
             };
-            if (prm.parOn)
+            if (par)
             {
-                flagLine (3, (float) prm.parHi, defPar, onirique::look::emberPink);
-                flagLine (2, (float) prm.parLo, true, onirique::look::emberPink);
+                flagLine (3, (float) prm.parHi, defPar && prm.parOn, onirique::look::emberPink);
+                flagLine (2, (float) prm.parLo, prm.parOn, onirique::look::emberPink);
             }
-            flagLine (1, (float) prm.mainHi, defMain, accentLit);
-            flagLine (0, (float) prm.mainLo, prm.mainOn, accentLit);
+            else
+            {
+                flagLine (1, (float) prm.mainHi, defMain, accentLit);
+                flagLine (0, (float) prm.mainLo, prm.mainOn, accentLit);
+            }
 
             // échelle des fréquences, dans le bas de l'écran
             for (float hz : { 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f })
             {
+                if (hz <= viewLo * 1.05f) continue;
                 const auto t = hz >= 1000 ? juce::String ((int) (hz / 1000)) + "k" : juce::String ((int) hz);
                 text (g, t, { xFor (hz) + 3 * scale, plot.getBottom() - 13 * scale, 30 * scale, 11 * scale }, font (Face::mono, 8.0f * scale), dim, juce::Justification::centredLeft);
             }
@@ -198,22 +201,15 @@ public:
             text (g, "S", r, font (Face::display, 9.5f * scale), lit ? bone : c.withAlpha (active ? 0.9f : 0.45f));
         };
         const int ms = (int) std::lround (prm.mainSolo);
-        if (prm.parOn)
+        if (par)
         {
-            sButton (2, (float) prm.parLo, onirique::look::emberPink, prm.parSolo || momentary == 5, true);
-            if (defPar) sButton (3, (float) prm.parHi, onirique::look::emberPink, prm.parSolo || momentary == 5, true);
+            sButton (2, (float) prm.parLo, onirique::look::emberPink, prm.parSolo || momentary == 5, prm.parOn);
+            sButton (3, (float) prm.parHi, onirique::look::emberPink, prm.parSolo || momentary == 5, defPar && prm.parOn);
+            return;
         }
         sButton (0, (float) prm.mainLo, accentLit, ms == 2 || momentary == 2, prm.mainOn);
         sButton (1, (float) prm.mainHi, accentLit, ms == 3 || momentary == 3, defMain && prm.mainOn);
 
-        // en haut à droite : référence et vitesse (un clic : les réglages)
-        const juce::String refNames[] { "NEUTRAL", "MODERN MIX", "VOCAL", "CUSTOM" }, speedNames[] { "SLOW", "MEDIUM", "FAST" };
-        const auto chip = chipArea();
-        g.setColour (ink.withAlpha (0.8f));
-        g.fillRoundedRectangle (chip, chip.getHeight() * 0.5f);
-        g.setColour (juce::Colours::white.withAlpha (chipHover ? 0.22f : 0.08f));
-        g.drawRoundedRectangle (chip, chip.getHeight() * 0.5f, 1.0f);
-        text (g, "REF " + refNames[refIndex()] + juce::String::fromUTF8 ("  \xc2\xb7  ") + speedNames[speedIndex()], chip, font (Face::body, 8.5f * scale, 0.12f), haze);
         juce::ignoreUnused (b);
     }
 
@@ -221,7 +217,7 @@ public:
     void mouseMove (const juce::MouseEvent& e) override
     {
         const int h = hitFlag (e.position), s = hitS (e.position);
-        const bool c = chipArea().contains (e.position);
+        const bool c = ! par && chipArea().contains (e.position);
         if (h != hot || s != sHot || c != chipHover) { hot = h; sHot = s; chipHover = c; repaint(); }
         setMouseCursor (s >= 0 || c ? juce::MouseCursor::PointingHandCursor : h >= 0 ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
     }
@@ -229,7 +225,7 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
-        if (chipArea().contains (e.position)) { if (onChip) onChip(); return; }
+        if (! par && chipArea().contains (e.position)) { if (onChip) onChip(); return; }
         const bool momentaryClick = e.mods.isPopupMenu() || e.mods.isCtrlDown();
         if (const int s = hitS (e.position); s >= 0)
         {
@@ -244,9 +240,9 @@ public:
         {
             // clic droit maintenu : sur un drapeau, au-dessus de lui ; ailleurs, la bande MAIN (ou PARALIMIT en bas)
             const auto prm = params::Reader (state).read (false);
-            int s = 1;
-            if (dragging == 0) s = 2; else if (dragging == 1) s = 3; else if (dragging >= 2) s = 5;
-            else if (prm.parOn && e.position.y > plotArea().getCentreY()) s = 5;
+            int s = par ? 5 : 1;
+            if (dragging == 0) s = 2; else if (dragging == 1) s = 3;
+            juce::ignoreUnused (prm);
             solo.store (s);
             dragging = -1;
             repaint();
@@ -275,7 +271,7 @@ public:
     }
 
 private:
-    static constexpr int order = 13, size = 1 << order, points = 260;
+    static constexpr int order = 13, size = 1 << order, points = 520;
 
     juce::Rectangle<float> plotArea() const
     {
@@ -288,18 +284,17 @@ private:
     }
     juce::Rectangle<float> chipArea() const
     {
-        const auto p = plotArea();
-        return { p.getRight() - 214 * scale, p.getY() + 5 * scale, 206 * scale, 16 * scale };
+        return {};   // plus de pastille sur l'écran : la référence et la vitesse sont dans ⚙
     }
     float xFor (float hz) const
     {
         const auto p = plotArea();
-        return p.getX() + p.getWidth() * std::log (hz / tonal::minHz) / std::log (tonal::maxHz / tonal::minHz);
+        return p.getX() + p.getWidth() * std::log (hz / viewLo) / std::log (viewHi / viewLo);
     }
     float hzForX (float x) const
     {
         const auto p = plotArea();
-        return tonal::minHz * std::pow (tonal::maxHz / tonal::minHz, (x - p.getX()) / p.getWidth());
+        return viewLo * std::pow (viewHi / viewLo, (x - p.getX()) / p.getWidth());
     }
     float hzAt (int k) const { return tonal::minHz * std::pow (tonal::maxHz / tonal::minHz, (float) k / (float) (points - 1)); }
     float xAt (int k) const { return xFor (hzAt (k)); }
@@ -309,7 +304,7 @@ private:
         return juce::jmap (juce::jlimit (-36.0f, 22.0f, db), -36.0f, 22.0f, p.getBottom(), p.getY());
     }
 
-    int refIndex() const { return juce::jlimit (0, 3, (int) state.state.getProperty ("anaRef", 1)); }
+    int refIndex() const { return juce::jlimit (0, 4, (int) state.state.getProperty ("anaRef", 4)); }   // 4 : aucune (par défaut)
     int speedIndex() const { return juce::jlimit (0, 2, (int) state.state.getProperty ("anaSpeed", 1)); }
     float grZoom() const { const int z = (int) state.state.getProperty ("grZoom", 1); return z == 0 ? 3.0f : z == 2 ? 12.0f : 6.0f; }
 
@@ -365,9 +360,9 @@ private:
         if (! plot.contains (pos)) return -1;
         const auto prm = params::Reader (state).read (false);
         int best = -1; float bestD = 8.0f * scale;
-        for (int i = 0; i < 4; ++i)
+        juce::ignoreUnused (prm);
+        for (int i = par ? 2 : 0; i < (par ? 4 : 2); ++i)
         {
-            if (i >= 2 && ! prm.parOn) continue;
             const float d = std::abs (pos.x - xFor (flagHz (i)));
             if (d < bestD) { bestD = d; best = i; }
         }
@@ -377,7 +372,7 @@ private:
     {
         const auto prm = params::Reader (state).read (false);
         const bool defMain = prm.mainMode == 1, defPar = prm.parMode == 1;
-        for (int i : { 0, 1, 2, 3 })
+        for (int i = par ? 2 : 0; i < (par ? 4 : 2); ++i)
         {
             if (i == 1 && ! defMain) continue;
             if (i >= 2 && ! prm.parOn) continue;
@@ -413,8 +408,8 @@ private:
     //==========================================================================
     void timerCallback() override
     {
-        const float gr[2] { meters.grA.load(), meters.grB.load() };
-        for (int i = 0; i < 2; ++i) grShown[i] = gr[i] > grShown[i] ? gr[i] : grShown[i] + 0.25f * (gr[i] - grShown[i]);
+        const float gr[4] { meters.grA.load(), meters.grB.load(), meters.grPL.load(), meters.grPR.load() };
+        for (int i = 0; i < 4; ++i) grShown[i] = gr[i] > grShown[i] ? gr[i] : grShown[i] + 0.25f * (gr[i] - grShown[i]);
         scope.read (pre.data(), post.data(), size);
         const double fs = std::max (8000.0, scope.rate.load());
         const float a = speedIndex() == 0 ? 0.06f : speedIndex() == 2 ? 0.4f : 0.16f;
@@ -428,7 +423,7 @@ private:
         montre la balance tonale, pas le niveau */
     void spectrum (const std::vector<float>& x, double fs, std::vector<float>& disp, float a)
     {
-        if (fs != smootherRate) { smoother.build (fs, size, points, 1.0 / 6.0); smootherRate = fs; }
+        if (fs != smootherRate) { smoother.build (fs, size, points, 1.0 / 24.0); smootherRate = fs; }
         std::fill (work.begin(), work.end(), 0.0f);
         for (int i = 0; i < size; ++i) work[(size_t) i] = x[(size_t) i] * window[(size_t) i];
         fft.performFrequencyOnlyForwardTransform (work.data(), true);
@@ -462,7 +457,9 @@ private:
     mutable std::vector<float> customCache;
     mutable juce::String customSource;
     Gesture gesture;
-    float grShown[2] {}, scale = 1.0f;
+    bool par = false;
+    float viewLo = 20.0f, viewHi = 20000.0f;
+    float grShown[4] {}, scale = 1.0f;
     int hot = -1, sHot = -1, dragging = -1;
     bool chipHover = false;
 };

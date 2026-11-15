@@ -67,6 +67,9 @@ public:
 private:
     void process (juce::AudioBuffer<float>&, bool bypassed);
     void timerCallback() override;
+#if ONIRIQUE_UI_TEST
+    void primeDemo();
+#endif
 
     params::Reader reader { apvts };
     halo::Engine engine;

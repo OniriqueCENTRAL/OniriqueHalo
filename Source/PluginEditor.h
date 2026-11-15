@@ -44,10 +44,11 @@ private:
     HaloProcessor& processor;
     ui::FontScope fonts;
     ui::KnobLook knobLook;
+    ui::MenuLook menuLook;
     juce::Image background, logo;
     juce::TooltipWindow tooltips { this, 700 };
 
-    ui::Analyser analyser;
+    ui::Analyser analyser, parAnalyser;
     // MAIN
     ui::ThresholdFader thresholds;
     ui::Segments channel, attack, release;

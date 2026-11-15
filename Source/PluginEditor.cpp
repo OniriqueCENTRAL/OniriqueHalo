@@ -12,7 +12,7 @@ const juce::Point<float> big { 132, 162 }, medium { 104, 128 }, tiny { 58, 74 };
 
 namespace layout
 {
-const R strip { 14, 58, 1072, 200 };
+const R strip { 14, 58, 806, 200 }, parStrip { 828, 58, 258, 200 };
 const R mainPanel { 14, 266, 806, 276 }, parPanel { 828, 266, 258, 276 };
 const R status { 14, 550, 1072, 40 };
 }
@@ -22,6 +22,7 @@ const R status { 14, 550, 1072, 40 };
 HaloEditor::HaloEditor (HaloProcessor& proc)
     : AudioProcessorEditor (proc), processor (proc),
       analyser (proc.apvts, proc.scope(), proc.meters(), proc.momentarySolo),
+      parAnalyser (proc.apvts, proc.scope(), proc.meters(), proc.momentarySolo, true),
       thresholds (proc.apvts, proc.meters()),
       channel (p (params::stereo), { "L/R", "M/S" }),
       attack (p (params::attack), { "SLOW", "FAST" }), release (p (params::release), { "SLOW", "FAST" }),
@@ -52,6 +53,7 @@ HaloEditor::HaloEditor (HaloProcessor& proc)
       bar (proc.presets, proc.apvts, "HALO", {}, baseWidth, baseWidth)
 {
     onirique::look::load();
+    setLookAndFeel (&menuLook);   // menus et infobulles dans la DA
     bar.onThemeChanged = [this]
     {
         renderBackground();
@@ -65,7 +67,7 @@ HaloEditor::HaloEditor (HaloProcessor& proc)
     }
 
     for (juce::Component* c : std::initializer_list<juce::Component*> {
-             &analyser, &thresholds, &channel, &attack, &release, &chLink, &trim, &ladder, &mainPower,
+             &analyser, &parAnalyser, &thresholds, &channel, &attack, &release, &chLink, &trim, &ladder, &mainPower,
              &amount, &parSolo, &parChannel, &parThr, &parTrim, &parLink, &parPower,
              &inItem, &osItem, &renderItem, &modeItem, &bandItem, &paraItem, &mixItem, &deltaItem, &outItem, &matchItem,
              &inMeter, &outMeter, &undoButton, &redoButton, &settingsButton, &ext })
@@ -126,6 +128,8 @@ HaloEditor::HaloEditor (HaloProcessor& proc)
     {
         const juce::String path (png);
         juce::Component::SafePointer<HaloEditor> safe (this);
+        if (juce::SystemStats::getEnvironmentVariable ("ONIRIQUE_UI_TEST", {}).contains ("settings"))
+            juce::Timer::callAfterDelay (900, [safe] { if (safe != nullptr) safe->showSettings(); });
         if (juce::SystemStats::getEnvironmentVariable ("ONIRIQUE_UI_TEST", {}).contains ("browser"))
             juce::Timer::callAfterDelay (500, [safe] { if (safe != nullptr) safe->bar.openBrowser(); });
         juce::Timer::callAfterDelay (2500, [safe, path]
@@ -135,6 +139,30 @@ HaloEditor::HaloEditor (HaloProcessor& proc)
             { juce::Graphics g (img); safe->paintEntireComponent (g, true); }
             juce::File f (path); f.deleteFile();
             if (auto os = f.createOutputStream()) juce::PNGImageFormat().writeImageToStream (img, *os);
+            // et un menu dessiné par le style de la DA (les menus ont leur propre fenêtre, hors de la capture)
+            if (juce::SystemStats::getEnvironmentVariable ("ONIRIQUE_UI_TEST", {}).contains ("menupng"))
+            {
+                auto& lf = safe->menuLook;
+                const char* rows[] { "#HALO", "Analyseur : vitesse>", "Analyseur : référence tonale>", "Zoom des réductions>", "-",
+                                     "*Modern Mix", " Neutral", "!Vocal" };
+                juce::Image m (juce::Image::ARGB, 300, 8 * 28 + 10, true, juce::SoftwareImageType());
+                juce::Graphics mg (m);
+                lf.drawPopupMenuBackground (mg, m.getWidth(), m.getHeight());
+                int y = 5;
+                for (auto* rowText : rows)
+                {
+                    const juce::String t = juce::String::fromUTF8 (rowText);
+                    const juce::Rectangle<int> area (5, y, 290, t == "-" ? 9 : 28);
+                    if (t.startsWith ("#")) lf.drawPopupMenuSectionHeader (mg, area, t.substring (1));
+                    else if (t == "-") lf.drawPopupMenuItem (mg, area, true, true, false, false, false, {}, {}, nullptr, nullptr);
+                    else lf.drawPopupMenuItem (mg, area, false, true, t.startsWith ("!"), t.startsWith ("*"), t.endsWith (">"),
+                                               t.substring (1).upToLastOccurrenceOf (">", false, false).trim().isEmpty() ? t : t.trimCharactersAtStart ("*!").trimCharactersAtEnd (">").trim(),
+                                               {}, nullptr, nullptr);
+                    y += area.getHeight();
+                }
+                juce::File mf (path.upToLastOccurrenceOf (".", false, false) + "-menu.png"); mf.deleteFile();
+                if (auto os2 = mf.createOutputStream()) juce::PNGImageFormat().writeImageToStream (m, *os2);
+            }
         });
     }
 }
@@ -142,6 +170,7 @@ HaloEditor::HaloEditor (HaloProcessor& proc)
 HaloEditor::~HaloEditor()
 {
     removeMouseListener (this);
+    setLookAndFeel (nullptr);
     processor.momentarySolo.store (-1);
     onirique::window::rememberOnThisComputer (pluginName, getWidth(), getHeight());
 }
@@ -230,10 +259,11 @@ void HaloEditor::showSettings()
 {
     auto& st = processor.apvts.state;
     juce::PopupMenu menu, speed, ref, zoom, parTimes, soloMenu, lat;
-    const int sp = (int) st.getProperty ("anaSpeed", 1), rf = (int) st.getProperty ("anaRef", 1), zm = (int) st.getProperty ("grZoom", 1);
+    const int sp = (int) st.getProperty ("anaSpeed", 1), rf = (int) st.getProperty ("anaRef", 4), zm = (int) st.getProperty ("grZoom", 1);
     speed.addItem (101, "Lente", true, sp == 0);
     speed.addItem (102, "Moyenne", true, sp == 1);
     speed.addItem (103, "Rapide", true, sp == 2);
+    ref.addItem (206, fr ("Aucune (spectre seul)"), true, rf == 4);
     ref.addItem (201, "Neutral", true, rf == 0);
     ref.addItem (202, "Modern Mix", true, rf == 1);
     ref.addItem (203, "Vocal", true, rf == 2);
@@ -280,6 +310,7 @@ void HaloEditor::showSettings()
         };
         if (id >= 101 && id <= 103) s.setProperty ("anaSpeed", id - 101, nullptr);
         else if (id >= 201 && id <= 204) s.setProperty ("anaRef", id - 201, nullptr);
+        else if (id == 206) s.setProperty ("anaRef", 4, nullptr);
         else if (id == 205) { safe->analyser.captureCustom(); s.setProperty ("anaRef", 3, nullptr); }
         else if (id >= 301 && id <= 303) s.setProperty ("grZoom", id - 301, nullptr);
         else if (id == 401 || id == 402) setParam (params::parAttack, (float) (id - 401));
@@ -299,6 +330,7 @@ void HaloEditor::resized()
     auto item = [&] (ui::StatusItem& i, R r) { place (i, r); i.setScale (s); };
 
     place (analyser, layout::strip); analyser.setScale (s);
+    place (parAnalyser, layout::parStrip); parAnalyser.setScale (s);
 
     // MAIN
     {
@@ -382,7 +414,7 @@ void HaloEditor::renderBackground()
     g.addTransform (juce::AffineTransform::scale (scale() * k));
     using namespace ui;
 
-    for (const auto& r : { layout::strip, layout::mainPanel, layout::parPanel, layout::status })
+    for (const auto& r : { layout::mainPanel, layout::parPanel, layout::status })
         onirique::da::glass (g, r, 14.0f, 1.0f);
 
     // MAIN : légendes de la colonne, icônes du CH LINK, séparation

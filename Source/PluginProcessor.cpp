@@ -1,5 +1,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#if ONIRIQUE_UI_TEST
+ #include <juce_audio_formats/juce_audio_formats.h>
+#endif
 
 HaloProcessor::HaloProcessor()
     : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
@@ -34,7 +37,35 @@ void HaloProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     engine.prepare (sampleRate, samplesPerBlock, reader.read (isNonRealtime()));
     setLatencySamples (engine.getLatency());
     prepared.store (true);
+   #if ONIRIQUE_UI_TEST
+    primeDemo();
+   #endif
 }
+
+#if ONIRIQUE_UI_TEST
+// Build de démo (jamais publié) : ONIRIQUE_DEMO_WAV=prise → quelques secondes passent une fois dans le vrai moteur au
+// prepare, pour que l'analyseur et les indicateurs de la démo du site montrent un vrai traitement.
+void HaloProcessor::primeDemo()
+{
+    const auto path = juce::SystemStats::getEnvironmentVariable ("ONIRIQUE_DEMO_WAV", {});
+    if (path.isEmpty()) return;
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (juce::File (path)));
+    if (r == nullptr) return;
+    const juce::int64 total = r->lengthInSamples;
+    const int n = (int) std::min<juce::int64> (total, (juce::int64) (r->sampleRate * 6.0));
+    const juce::int64 start = std::max<juce::int64> (0, std::min<juce::int64> (total / 3, total - n));
+    juce::AudioBuffer<float> b (2, n);
+    r->read (&b, 0, n, start, true, true);
+    const auto p = reader.read (false);
+    for (int s = 0; s < n; s += 512)
+    {
+        juce::AudioBuffer<float> part (b.getArrayOfWritePointers(), 2, s, std::min (512, n - s));
+        engine.process (part, nullptr, 0, p);
+    }
+}
+#endif
 
 void HaloProcessor::timerCallback()
 {
