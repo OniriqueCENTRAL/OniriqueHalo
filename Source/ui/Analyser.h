@@ -183,6 +183,7 @@ public:
             for (float hz : { 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f })
             {
                 if (hz <= viewLo * 1.05f) continue;
+                if (par && hz != 100.f && hz != 1000.f && hz != 10000.f) continue;   // zone étroite : trois repères
                 const auto t = hz >= 1000 ? juce::String ((int) (hz / 1000)) + "k" : juce::String ((int) hz);
                 text (g, t, { xFor (hz) + 3 * scale, plot.getBottom() - 13 * scale, 30 * scale, 11 * scale }, font (Face::mono, 8.0f * scale), dim, juce::Justification::centredLeft);
             }
@@ -204,11 +205,12 @@ public:
         if (par)
         {
             sButton (2, (float) prm.parLo, onirique::look::emberPink, prm.parSolo || momentary == 5, prm.parOn);
-            sButton (3, (float) prm.parHi, onirique::look::emberPink, prm.parSolo || momentary == 5, defPar && prm.parOn);
+            sButton (3, (float) prm.parHi, onirique::look::emberPink, prm.parSolo || momentary == 5, prm.parOn);
             return;
         }
-        sButton (0, (float) prm.mainLo, accentLit, ms == 2 || momentary == 2, prm.mainOn);
-        sButton (1, (float) prm.mainHi, accentLit, ms == 3 || momentary == 3, defMain && prm.mainOn);
+        // les deux S d'un moteur écoutent ensemble toute la bande sélectionnée
+        sButton (0, (float) prm.mainLo, accentLit, ms == 1 || momentary == 1, prm.mainOn);
+        sButton (1, (float) prm.mainHi, accentLit, ms == 1 || momentary == 1, prm.mainOn);
 
         juce::ignoreUnused (b);
     }
@@ -229,10 +231,10 @@ public:
         const bool momentaryClick = e.mods.isPopupMenu() || e.mods.isCtrlDown();
         if (const int s = hitS (e.position); s >= 0)
         {
-            if (momentaryClick) { solo.store (s == 0 ? 2 : s == 1 ? 3 : 5); repaint(); return; }
+            if (momentaryClick) { solo.store (s >= 2 ? 5 : 1); repaint(); return; }
             // un clic : solo tenu (un second clic le rend)
             if (s >= 2) toggleParam ("parSolo", 1.0f);
-            else toggleParam ("mainSolo", s == 0 ? 2.0f : 3.0f);
+            else toggleParam ("mainSolo", 1.0f);
             return;
         }
         dragging = hitFlag (e.position);
@@ -241,7 +243,6 @@ public:
             // clic droit maintenu : sur un drapeau, au-dessus de lui ; ailleurs, la bande MAIN (ou PARALIMIT en bas)
             const auto prm = params::Reader (state).read (false);
             int s = par ? 5 : 1;
-            if (dragging == 0) s = 2; else if (dragging == 1) s = 3;
             juce::ignoreUnused (prm);
             solo.store (s);
             dragging = -1;
@@ -374,11 +375,10 @@ private:
     {
         const auto prm = params::Reader (state).read (false);
         const bool defMain = prm.mainMode == 1, defPar = prm.parMode == 1;
+        juce::ignoreUnused (defMain, defPar);
         for (int i = par ? 2 : 0; i < (par ? 4 : 2); ++i)
         {
-            if (i == 1 && ! defMain) continue;
             if (i >= 2 && ! prm.parOn) continue;
-            if (i == 3 && ! defPar) continue;
             if (sArea (flagHz (i)).expanded (2 * scale).contains (pos)) return i;
         }
         return -1;
